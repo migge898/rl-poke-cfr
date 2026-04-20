@@ -8,7 +8,8 @@ Install [Node and NPM](https://nodejs.org/en/download).
 
 ```shell
 pip install -r requirements.txt
-``
+```
+
 Clone and run Pokémon Showdown server locally:
 ```shell
 git clone https://github.com/smogon/pokemon-showdown.git
