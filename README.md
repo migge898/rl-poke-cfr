@@ -17,4 +17,4 @@ cd pokemon-showdown
 npm install
 cp config/config-example.js config/config.js
 node pokemon-showdown start --no-security
-``
+```
