@@ -1,1 +1,4 @@
 poke_env==0.15.0
+tensorboard==2.20.0
+torch==2.11.0+cpu
+torchvision==0.26.0+cpu
