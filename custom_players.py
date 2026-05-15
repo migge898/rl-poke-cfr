@@ -5,7 +5,6 @@ import datetime
 from collections import defaultdict
 from poke_env.player import Player
 from poke_env.data import GenData
-from torch.utils.tensorboard import SummaryWriter
 
 class MaxDamagePlayer(Player):
     def choose_move(self, battle):
@@ -38,12 +37,6 @@ class TabularQLearningPlayer(Player):
         self.load_q_table()
 
         current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        log_dir = "logs/q_agent_" + current_time
-        # Tensorboard Writer
-        self.writer = SummaryWriter(log_dir=log_dir)
-        print(f"Tensorboard logs will be saved to {log_dir}.")
-        
-        self.battle_count = 0
         
         # Hyperparameter
         self.epsilon = 0.2
@@ -98,12 +91,6 @@ class TabularQLearningPlayer(Player):
         reward = 10.0 if battle.won else -10.0
         self._update_q(self.last_state, self.last_action, reward, None)
         
-        # Logging to Tensorboard
-        self.battle_count += 1
-        self.writer.add_scalar("Battle/Reward", reward, self.battle_count)
-        self.writer.add_scalar("Battle/Cumulative_Wins", self.n_won_battles, self.battle_count)
-        self.writer.add_scalar("Stats/Q_Table_Size", len(self.q_table), self.battle_count)
-        self.writer.flush()
         self.last_state = None
 
     def save_q_table(self):
