@@ -5,6 +5,7 @@ import datetime
 from collections import defaultdict
 from poke_env.player import Player
 from poke_env.data import GenData
+from helper import StateHelper
 
 class MaxDamagePlayer(Player):
     def choose_move(self, battle):
@@ -33,39 +34,66 @@ class TabularQLearningPlayer(Player):
     def __init__(self, *args, q_table_path="q_table.pkl", **kwargs):
         super().__init__(*args, **kwargs)
         self.q_table_path = q_table_path
-        self.q_table = defaultdict(lambda: np.zeros(6)) # 4 moves + 2 switches
+        
+        # Initialize the helper
+        self.state_helper = StateHelper()
+        
+        # 4 moves + 2 possible switch targets = 6 actions
+        self.q_table = defaultdict(lambda: np.zeros(6)) 
         self.load_q_table()
 
-        current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        
-        # Hyperparameter
+        # Hyperparameters
         self.epsilon = 0.2
         self.alpha = 0.1
         self.gamma = 0.9
         
         self.last_state = None
-        self.last_action = None
+        self.last_action_idx = None
 
     def _get_state(self, battle):
-        return (
-            battle.active_pokemon.species,
-            battle.opponent_active_pokemon.species,
-            int(battle.active_pokemon.current_hp_fraction * 5),
-            int(battle.opponent_active_pokemon.current_hp_fraction * 5)
-        )
+        """Uses the helper to build the complex state tuple."""
+        return self.state_helper.build_state(battle)
+
+    def _get_action_mapping(self, battle):
+        """Maps available actions to fixed slots 0-5."""
+        mapping = {}
+        
+        # Map moves to slots 0-3 based on their position in the moveset
+        current_moves = list(battle.active_pokemon.moves.values())
+        for move in battle.available_moves:
+            if move in current_moves:
+                slot = current_moves.index(move)
+                mapping[slot] = move
+        
+        # Map switches to slots 4-8 based on team position
+        team_list = list(battle.team.values())
+        for switch_out in battle.available_switches:
+            if switch_out in team_list:
+                slot = 4 + team_list.index(switch_out)
+                if slot <= 5:
+                    mapping[slot] = switch_out
+        return mapping
 
     def choose_move(self, battle):
         current_state = self._get_state(battle)
-        
-        if self.last_state is not None:
-            self._update_q(self.last_state, self.last_action, 0.1, current_state)
+        action_mapping = self._get_action_mapping(battle)
+        available_indices = list(action_mapping.keys())
 
-        available_indices = [i for i, _ in enumerate(battle.available_moves)]
-        available_indices += [i + 4 for i, _ in enumerate(battle.available_switches)]
+        # --- Debug Start ---
+        # print(f"\n--- Turn {battle.turn} ---")
+        # print(f"Available indices: {available_indices}")
+        # for idx, action in action_mapping.items():
+        #    print(f"  Slot {idx}: {action}")
+        # --- Debug Ende ---
+
+        # Q-Learning Update
+        if self.last_state is not None:
+            self._update_q(self.last_state, self.last_action_idx, 0.0, current_state)
 
         if not available_indices:
             return self.choose_random_move(battle)
 
+        # Action Selection (Epsilon-Greedy)
         if np.random.random() < self.epsilon:
             action_idx = np.random.choice(available_indices)
         else:
@@ -75,28 +103,30 @@ class TabularQLearningPlayer(Player):
             action_idx = np.argmax(q_values + mask)
 
         self.last_state = current_state
-        self.last_action = action_idx
+        self.last_action_idx = action_idx
 
-        if action_idx < 4:
-            return self.create_order(battle.available_moves[action_idx])
-        else:
-            return self.create_order(battle.available_switches[action_idx - 4])
+        # Use the mapping to return the actual move/switch object
+        return self.create_order(action_mapping[action_idx])
 
     def _update_q(self, state, action, reward, next_state):
+        if action is None:
+            return
         current_q = self.q_table[state][action]
         max_next_q = np.max(self.q_table[next_state]) if next_state is not None else 0
         self.q_table[state][action] = current_q + self.alpha * (reward + self.gamma * max_next_q - current_q)
 
     def on_battle_end(self, battle):
         reward = 10.0 if battle.won else -10.0
-        self._update_q(self.last_state, self.last_action, reward, None)
-        
+        self._update_q(self.last_state, self.last_action_idx, reward, None)
         self.last_state = None
+        self.last_action_idx = None
 
     def save_q_table(self):
         with open(self.q_table_path, "wb") as f:
             pickle.dump(dict(self.q_table), f)
         print(f"Q-Table saved to {self.q_table_path}")
+        print(len(self.q_table))
+        print(self.q_table)
 
     def load_q_table(self):
         if os.path.exists(self.q_table_path):
@@ -104,5 +134,4 @@ class TabularQLearningPlayer(Player):
                 loaded_dict = pickle.load(f)
                 self.q_table = defaultdict(lambda: np.zeros(6), loaded_dict)
             print(f"Loaded Q-Table with {len(self.q_table)} states.")
-        else:
-            print("No existing Q-Table found. Starting fresh.")
+            
