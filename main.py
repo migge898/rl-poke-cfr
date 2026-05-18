@@ -32,26 +32,28 @@ Adamant Nature
 """
 
 async def main():
+    concurrent_battles = 10
     # Setup Players
-    random_player = RandomPlayer(battle_format="gen4ou", team=GEN_4_TEAM, max_concurrent_battles=1)
-    max_damage_player = MaxDamagePlayer(battle_format="gen4ou", team=GEN_4_TEAM, max_concurrent_battles=1)
+    random_player = RandomPlayer(battle_format="gen4ou", team=GEN_4_TEAM, max_concurrent_battles=concurrent_battles)
+    max_damage_player = MaxDamagePlayer(battle_format="gen4ou", team=GEN_4_TEAM, max_concurrent_battles=concurrent_battles)
     
     # Q-Player will automatically try to load 'q_table.pkl'
     q_learning_player = TabularQLearningPlayer(
         battle_format="gen4ou", 
         team=GEN_4_TEAM, 
-        max_concurrent_battles=1,
+        max_concurrent_battles=concurrent_battles,
         q_table_path="q_table_gen4.pkl",
-        save_replays=True
+        save_replays=False
     )
 
     # 1. Training Phase (Skip if you think your table is good enough)
-    n_train = 100
+    n_train = 1
     if n_train > 0:
         print(f"Training for {n_train} battles...")
         await q_learning_player.battle_against(max_damage_player, n_battles=n_train)
         q_learning_player.save_q_table() # Save after training
 
+    exit()
     # 2. Evaluation Phase
     q_wins_before = q_learning_player.n_won_battles
     n_eval = 20
