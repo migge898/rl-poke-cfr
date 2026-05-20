@@ -45,34 +45,30 @@ class StateHelper:
             
         clean_name = name.lower().replace(" ", "").replace("-", "")
         return self.pokemon_to_id.get(clean_name, self.unknown_pokemon_id)
+    
 
     def build_state(self, battle):
-        """
-        Builds the complete state
-        """
         active = battle.active_pokemon
         opponent = battle.opponent_active_pokemon
 
-        # 1. Basic Battle Context
-        faster = 1 if active.base_stats["spe"] > opponent.base_stats["spe"] else 0
-        
-        my_hp = 1 if active.current_hp_fraction < 0.5 else 2
-        
-        # 2. Move Information (The "Knowledge" for the Agent)
-        # We create a fixed list of 4 move effectiveness values
-        move_info = [0, 0, 0, 0] # Default: No move / Status move
-        
-        # Mapping current moves to their effectiveness
-        current_moves = list(active.moves.values())
-        for i, move in enumerate(current_moves):
-            if i >= 4: break # Safety first
-            
-            if move.category == MoveCategory.STATUS:
-                move_info[i] = 1 # Status move
-            else:
-                eff = opponent.damage_multiplier(move)
-                if eff > 1: move_info[i] = 3      # Super effective
-                elif eff == 1: move_info[i] = 2    # Neutral
-                else: move_info[i] = 0             # Resisted / Immune
+        my_id = str(active.species)
 
-        return (faster, my_hp, *move_info)
+        opp_id = str(opponent.species) if opponent.species else "unknown"
+        
+        faster = 1 if active.base_stats["spe"] > opponent.base_stats["spe"] else 0
+
+        my_hp = int(active.current_hp_fraction * 4)
+        opp_hp = int(opponent.current_hp_fraction * 4)
+        
+        opp_eff = active.damage_multiplier(opponent.type_1)
+        threat = 0 if opp_eff > 1 else (2 if opp_eff < 1 else 1)
+
+        best_move_eff = 0
+        for move in battle.available_moves:
+            eff = opponent.damage_multiplier(move)
+            if eff > best_move_eff:
+                best_move_eff = eff
+        
+        my_best_option = 3 if best_move_eff > 1 else (2 if best_move_eff == 1 else 1)
+
+        return (my_id, opp_id, faster, my_hp, opp_hp, threat, my_best_option)
