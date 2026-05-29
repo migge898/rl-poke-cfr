@@ -37,49 +37,61 @@ class TabularQLearningPlayer(Player):
         
         self.state_helper = StateHelper()
         
-        # 4 move slots + 2 switch slots = 6 fixed actions
-        self.q_table = defaultdict(lambda: np.zeros(6)) 
+        # 4 move slots + 3 switch slots = 7 fixed actions
+        self.q_table = defaultdict(lambda: np.zeros(7)) 
         self.load_q_table()
 
         # Hyperparameters
         self.epsilon = 1.0
         self.epsilon_min = 0.05
-        self.epsilon_decay = 0.995
+        self.epsilon_decay = 0.999
         
         self.alpha = 0.01
+        self.alpha_min = 0.001
+        self.alpha_decay = 0.999
+
         self.gamma = 0.95
 
         self.last_states = {}
         self.last_action_indices = {}
 
+        self.team_ordered_names = None
+
+    def _get_team_list(self, battle):
+        """
+        Returns a fixed list of species names in the order they appear in the team.
+        """
+        if self.team_ordered_names is None:
+            self.team_ordered_names = sorted([p.species for p in battle.team.values()])
+        return self.team_ordered_names
+
     def _get_action_mapping(self, battle):
         """
-        Maps available actions to FIXED slots 0-5.
+        Maps available actions to FIXED slots 0-6.
         0-3: Moves (based on the position in the active pokemon's moveset)
-        4-5: Switches (based on the first two available switch options)
+        4-6: Switches (4=Team Member 0, 5=Team Member 1, 6=Team Member 2)
         """
         mapping = {}
+        team_list = self._get_team_list(battle)
         
         # --- 1. Map Moves (Slots 0-3) ---
-        # Get all moves known by the pokemon in a stable order
         active_pokemon = battle.active_pokemon
-        # Convert dictionary values to a list to get fixed positions (1st, 2nd, 3rd, 4th move)
         known_moves = list(active_pokemon.moves.values())
         
         for move in battle.available_moves:
             if move in known_moves:
-                # Find the permanent index (0 to 3) of this move
                 slot = known_moves.index(move)
                 if slot < 4:
                     mapping[slot] = move
 
-        # --- 2. Map Switches (Slots 4-5) ---
-        # We only have 2 slots for switches. We take the first two available ones.
-        # Note: In Gen 4 OU, you might have up to 5 switch targets. 
-        # With only 6 slots total, we can only map the first two.
-        for i, switch_option in enumerate(battle.available_switches):
-            slot = 4 + i
-            if slot <= 5:
+        # --- 2. Map Switches (Slots 4-6) ---
+        # Instead of taking the first available, we check which team member 
+        # is available and put it in its specific slot.
+        for switch_option in battle.available_switches:
+            # Find the index of this specific pokemon in our fixed team list
+            if switch_option.species in team_list:
+                team_idx = team_list.index(switch_option.species)
+                slot = 4 + team_idx
                 mapping[slot] = switch_option
                 
         return mapping
@@ -106,7 +118,7 @@ class TabularQLearningPlayer(Player):
         else:
             q_values = self.q_table[current_state]
             # Create a mask: -infinity for unavailable actions, 0 for available ones
-            mask = np.full(6, -np.inf)
+            mask = np.full(7, -np.inf)
             mask[available_indices] = 0
             # Argmax will now only pick from available indices
             action_idx = int(np.argmax(q_values + mask))
@@ -152,6 +164,8 @@ class TabularQLearningPlayer(Player):
         my_fainted = sum(1 for p in battle.team.values() if p.fainted)
         reward += (opp_fainted - my_fainted) * 2.0
 
+        self.alpha = max(self.alpha * self.alpha_decay, self.alpha_min)
+
         if self.epsilon != 0.0: 
             self.epsilon = max(self.epsilon * self.epsilon_decay, self.epsilon_min)
 
@@ -169,10 +183,10 @@ class TabularQLearningPlayer(Player):
     def save_q_table(self):
         with open(self.q_table_path, "wb") as f:
             pickle.dump(dict(self.q_table), f)
-        print(f"Saved Q-Table. States: {len(self.q_table)}")
-        # print states of q table
-        for state in self.q_table:
-            print(f"State: {state}")
+        # print(f"Saved Q-Table. States: {len(self.q_table)}")
+        # # print states of q table
+        # for state in self.q_table:
+        #     print(f"State: {state}")
 
 
     def load_q_table(self):
