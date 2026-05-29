@@ -44,7 +44,7 @@ class TabularQLearningPlayer(Player):
         # Hyperparameters
         self.epsilon = 1.0
         self.epsilon_min = 0.05
-        self.epsilon_decay = 0.999
+        self.epsilon_decay = 0.997
         
         self.alpha = 0.01
         self.alpha_min = 0.001
@@ -76,15 +76,14 @@ class TabularQLearningPlayer(Player):
         faints_inflicted = current_opp_fainted - last_opp
         faints_suffered = current_my_fainted - last_my
         
-        # Immediate reward logic: +10 for KOing enemy, -10 for losing your own
-        reward = (faints_inflicted * 5.0) - (faints_suffered * 5.0)
+        reward = (faints_inflicted * 10.0) - (faints_suffered * 10.0)
         
         # Win/Loss bonus at the end
         if end_of_battle:
             if battle.won:
-                reward += 30.0
+                reward += 20.0
             else:
-                reward -= 30.0
+                reward -= 20.0
                 
         # Update the tracker
         self.last_faint_counts[tag] = (current_my_fainted, current_opp_fainted)
