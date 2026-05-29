@@ -34,7 +34,6 @@ Adamant Nature
 - Pursuit"""
 ]
 
-# This class will shuffle your team AUTOMATICALLY before every single battle
 class ShuffledTeambuilder(Teambuilder):
     def __init__(self, team_list):
         self.converted_teams = [self.join_team(self.parse_showdown_team(t)) for t in team_list]
@@ -50,7 +49,7 @@ async def main():
     # Initialize the teambuilder
     teambuilder = ShuffledTeambuilder(TEAM_LIST)
 
-    # Setup Players using the teambuilder instead of a static string
+    # Setup Players
     random_player = RandomPlayer(
         battle_format="gen4ou", 
         team=teambuilder, 
@@ -71,19 +70,23 @@ async def main():
     )
 
     # 1. Training Phase
-    n_train = 2000
-    if n_train > 0:
-        print(f"Training for {n_train} battles with rotating leads...")
-        await q_learning_player.battle_against(max_damage_player, n_battles=n_train)
-        
+    n_train_per_player = 1000
+    if n_train_per_player > 0:
+        # Split the training count
+        print(f"Training for {n_train_per_player} battles against RandomPlayer ...")
+
+        await q_learning_player.battle_against(random_player, n_battles=n_train_per_player)
+
+        print(f"Training for {n_train_per_player} battles against MaxDamagePlayer ...")
+        await q_learning_player.battle_against(max_damage_player, n_battles=n_train_per_player)
+
         print(f"Training finished. Final Epsilon: {q_learning_player.epsilon:.4f}")
         q_learning_player.save_q_table() 
 
     # 2. Evaluation Phase
-    # Reset stats for evaluation
     q_wins_before = q_learning_player.n_won_battles
     n_eval = 100
-    q_learning_player.epsilon = 0.0 # No exploration during evaluation
+    q_learning_player.epsilon = 0.0 # No exploration
     
     print(f"Evaluation against Random for {n_eval} battles...")
     await q_learning_player.battle_against(random_player, n_battles=n_eval)
