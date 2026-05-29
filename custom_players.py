@@ -54,8 +54,41 @@ class TabularQLearningPlayer(Player):
 
         self.last_states = {}
         self.last_action_indices = {}
+        self.last_faint_counts = {}
 
         self.team_ordered_names = None
+
+
+    def _compute_reward(self, battle, end_of_battle=False):
+        tag = battle.battle_tag
+        
+        # Current counts
+        current_my_fainted = sum(1 for p in battle.team.values() if p.fainted)
+        current_opp_fainted = sum(1 for p in battle.opponent_team.values() if p.fainted)
+        
+        # Initialize if this is the first turn
+        if tag not in self.last_faint_counts:
+            self.last_faint_counts[tag] = (0, 0)
+            
+        last_my, last_opp = self.last_faint_counts[tag]
+        
+        # Calculate differences
+        faints_inflicted = current_opp_fainted - last_opp
+        faints_suffered = current_my_fainted - last_my
+        
+        # Immediate reward logic: +10 for KOing enemy, -10 for losing your own
+        reward = (faints_inflicted * 5.0) - (faints_suffered * 5.0)
+        
+        # Win/Loss bonus at the end
+        if end_of_battle:
+            if battle.won:
+                reward += 30.0
+            else:
+                reward -= 30.0
+                
+        # Update the tracker
+        self.last_faint_counts[tag] = (current_my_fainted, current_opp_fainted)
+        return reward
 
     def _get_team_list(self, battle):
         """
@@ -106,7 +139,15 @@ class TabularQLearningPlayer(Player):
         if tag in self.last_states:
             # For the update, we need to know which actions are possible in the NEXT state
             # to calculate the max Q correctly.
-            self._update_q(self.last_states[tag], self.last_action_indices[tag], 0.0, current_state, available_indices)
+            step_reward = self._compute_reward(battle, end_of_battle=False)
+            
+            self._update_q(
+                self.last_states[tag],
+                self.last_action_indices[tag],
+                step_reward,
+                current_state,
+                available_indices
+            )
 
         # If no actions are available (e.g. during animations or weird state), fallback
         if not available_indices:
@@ -153,16 +194,12 @@ class TabularQLearningPlayer(Player):
         self.q_table[state][action] = current_q + self.alpha * (reward + self.gamma * max_next_q - current_q)
 
     def _battle_finished_callback(self, battle):
-        # Result-based reward
-        reward = 20.0 if battle.won else -20.0
-        opp_fainted = sum(1 for p in battle.opponent_team.values() if p.fainted)
-
         tag = battle.battle_tag
+
+        final_reward = self._compute_reward(battle, end_of_battle=True)
+
         last_state = self.last_states.get(tag)
         last_action_idx = self.last_action_indices.get(tag)
-
-        my_fainted = sum(1 for p in battle.team.values() if p.fainted)
-        reward += (opp_fainted - my_fainted) * 2.0
 
         self.alpha = max(self.alpha * self.alpha_decay, self.alpha_min)
 
@@ -170,11 +207,12 @@ class TabularQLearningPlayer(Player):
             self.epsilon = max(self.epsilon * self.epsilon_decay, self.epsilon_min)
 
         if last_state is not None:
-            self._update_q(last_state, last_action_idx, reward, None)
+            self._update_q(last_state, last_action_idx, final_reward, None)
         
         # Reset trackers for next battle
         if tag in self.last_states: del self.last_states[tag]
         if tag in self.last_action_indices: del self.last_action_indices[tag]
+        if tag in self.last_faint_counts: del self.last_faint_counts[tag]
 
     def _get_state(self, battle):
         # Placeholder for your StateHelper
