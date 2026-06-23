@@ -1,7 +1,18 @@
 import json
 import os
+import numpy as np
 
 from poke_env.battle import MoveCategory
+
+def one_hot(value: int, min_val: int, max_val: int) -> np.ndarray:
+    length = max_val - min_val + 1
+    vec = np.zeros(length, dtype=np.float32)
+    idx = int(clip(value, min_val, max_val) - min_val)
+    vec[idx] = 1.0
+    return vec
+
+def clip(n, minn, maxn):
+    return max(min(maxn, n), minn)
 
 class StateHelper:
     def __init__(self, pokedex_path="data/gen4pokedex.json", moves_path="data/gen4moves.json"):

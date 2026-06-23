@@ -745,3 +745,60 @@ Hasty Nature
         """
     }
 ]
+
+TEST_TEAM = """
+Smeargle @ Focus Sash  
+Ability: Own Tempo  
+EVs: 252 HP / 4 SpD / 252 Spe  
+Jolly Nature  
+- Toxic Spikes  
+- Stealth Rock  
+- Spikes  
+- U-turn  
+
+Bronzong @ Light Clay  
+Ability: Levitate  
+EVs: 252 HP / 152 Def / 104 SpD  
+Sassy Nature  
+IVs: 0 Spe  
+- Reflect  
+- Light Screen  
+- Gyro Ball  
+- Explosion  
+
+Tyranitar @ Choice Band  
+Ability: Sand Stream  
+EVs: 160 HP / 252 Atk / 96 Spe  
+Adamant Nature  
+- Stone Edge  
+- Crunch  
+- Pursuit  
+- Aqua Tail  
+
+Gyarados @ Leftovers  
+Ability: Intimidate  
+EVs: 156 HP / 72 Atk / 96 Def / 184 Spe  
+Adamant Nature  
+- Dragon Dance  
+- Waterfall  
+- Stone Edge  
+- Taunt  
+
+Dragonite @ Life Orb  
+Ability: Inner Focus  
+EVs: 252 Atk / 4 SpA / 252 Spe  
+Lonely Nature  
+- Dragon Dance  
+- Outrage  
+- Earthquake  
+- Fire Blast  
+
+Blissey (F) @ Leftovers  
+Ability: Natural Cure  
+EVs: 252 Def / 80 SpA / 176 SpD  
+Calm Nature  
+- Toxic  
+- Soft-Boiled  
+- Flamethrower  
+- Seismic Toss  
+"""

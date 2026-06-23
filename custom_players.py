@@ -1,11 +1,16 @@
+from typing import Awaitable
+
 import numpy as np
 import pickle
 import os
 import datetime
 from collections import defaultdict
-from poke_env.player import Player
+from poke_env.battle import AbstractBattle, Field, SideCondition
+from poke_env.environment import SinglesEnv
+from poke_env.player import BattleOrder, DefaultBattleOrder, Player
 from poke_env.data import GenData
-from helper import StateHelper
+import torch
+from helper import StateHelper, one_hot
 
 class MaxDamagePlayer(Player):
     def choose_move(self, battle):
@@ -232,3 +237,119 @@ class TabularQLearningPlayer(Player):
                 loaded_dict = pickle.load(f)
                 self.q_table = defaultdict(lambda: np.zeros(6), loaded_dict)
             print(f"Loaded Q-Table with {len(self.q_table)} states.")
+
+class WangPlayer(Player):
+    def __init__(self, policy=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.policy = policy
+        self.gen_data = GenData.from_gen(9)
+        # Create a mapping for species to index
+        self.species_list = sorted(list(self.gen_data.pokedex.keys()))
+        self.species_to_id = {s: i for i, s in enumerate(self.species_list)}
+
+    def embed_battle(self, battle: AbstractBattle) -> np.ndarray:
+        debug_dict = {}
+        # 1. Global / Side Conditions
+        side_features = []
+        side_labels = ["me", "opponent"]
+        side_conditions = [battle.side_conditions, battle.opponent_side_conditions]
+        
+        # Global: Trick Room (length 7: 0-5 turns + No Trick Room)
+        tr_turns = battle.fields.get(Field.TRICK_ROOM, 0)
+        side_features.append(one_hot(tr_turns, 0, 6))
+        debug_dict["trick_room"] = one_hot(tr_turns, 0, 6).tolist()
+
+        # Stealth Rock (Binary: Me, then Opponent)
+        for i, side in enumerate(side_conditions):
+            sr = 1 if SideCondition.STEALTH_ROCK in side else 0
+            side_features.append(one_hot(sr, 0, 1))
+            debug_dict[f"{side_labels[i]}_stealth_rock"] = one_hot(sr, 0, 1).tolist()
+            
+        # Spikes (One-hot 0-3: Me, then Opponent)
+        for i, side in enumerate(side_conditions):
+            spikes = side.get(SideCondition.SPIKES, 0)
+            side_features.append(one_hot(spikes, 0, 3))
+            debug_dict[f"{side_labels[i]}_spikes"] = one_hot(spikes, 0, 3).tolist()
+            
+        # Toxic Spikes (One-hot 0-2: Me, then Opponent)
+        for i, side in enumerate(side_conditions):
+            t_spikes = side.get(SideCondition.TOXIC_SPIKES, 0)
+            side_features.append(one_hot(t_spikes, 0, 2))
+            debug_dict[f"{side_labels[i]}_toxic_spikes"] = one_hot(t_spikes, 0, 2).tolist()
+
+        # Reflect (One-hot 0-9: Me, then Opponent)
+        for i, side in enumerate(side_conditions):
+            turns = side.get(SideCondition.REFLECT, 0)
+            val = 5 if turns is True else (turns if isinstance(turns, int) else 0)
+            side_features.append(one_hot(val, 0, 9))
+            debug_dict[f"{side_labels[i]}_reflect"] = one_hot(val, 0, 9).tolist()
+
+        # Light Screen (One-hot 0-9: Me, then Opponent)
+        for i, side in enumerate(side_conditions):
+            turns = side.get(SideCondition.LIGHT_SCREEN, 0)
+            val = 5 if turns is True else (turns if isinstance(turns, int) else 0)
+            side_features.append(one_hot(val, 0, 9))
+            debug_dict[f"{side_labels[i]}_light_screen"] = one_hot(val, 0, 9).tolist()
+
+        # Safeguard (One-hot 0-6: Me, then Opponent)
+        for i, side in enumerate(side_conditions):
+            turns = side.get(SideCondition.SAFEGUARD, 0)
+            val = 3 if turns is True else (turns if isinstance(turns, int) else 0)
+            side_features.append(one_hot(val, 0, 6))
+            debug_dict[f"{side_labels[i]}_safeguard"] = one_hot(val, 0, 6).tolist()
+
+        # 2. Pokemon Representation (Table A.2)
+        pokemon_features = []
+        
+        # We need exactly 6 for us and 6 for opponent to maintain vector size
+        all_mons = list(battle.team.values())
+        while len(all_mons) < 6: all_mons.append(None)
+        
+        opp_mons = list(battle.opponent_team.values())
+        while len(opp_mons) < 6: opp_mons.append(None)
+        debug_dict["pokemon"] = []
+
+        for mon in all_mons + opp_mons:
+            debug_mon = {}
+            if mon is None:
+                pokemon_features.append(np.zeros(99)) # Species(1) + HP(7) + 7*Boosts(13)
+            else:
+                mon_vec = []
+
+                spec_id = self.species_to_id.get(mon.species, 0)
+                mon_vec.append([spec_id])
+                debug_mon["species"] = f"{mon.species} (ID: {spec_id})"
+                
+                # HP Binning (Table A.0.1)
+                if mon.current_hp == 0:
+                    hp_vec = one_hot(0, 0, 6)
+                else:
+                    # 1 to 6 bins for > 0 HP
+                    hp_bin = int(mon.current_hp_fraction * 5) + 1
+                    hp_vec = one_hot(hp_bin, 0, 6)
+                mon_vec.append(hp_vec)
+                debug_mon["hp"] = f"{hp_vec.tolist()} (HP%: {mon.current_hp_fraction:.2f})"
+                
+                # Boosts (7 stats, -6 to +6 -> 13 bins)
+                for stat in ["atk", "def", "spa", "spd", "spe", "accuracy", "evasion"]:
+                    boost_val = mon.boosts.get(stat, 0)
+                    mon_vec.append(one_hot(boost_val, -6, 6))
+                    debug_mon[f"{stat}_boost"] = f"{one_hot(boost_val, -6, 6).tolist()} (Boost: {boost_val})"
+                
+                debug_dict["pokemon"].append(debug_mon)
+                pokemon_features.append(np.concatenate(mon_vec))
+
+        return np.concatenate(side_features + pokemon_features, dtype=np.float32)
+    
+    def choose_move(self, battle: AbstractBattle) -> BattleOrder | Awaitable[BattleOrder]:
+        # if battle.wait: return DefaultBattleOrder()
+        obs = self.embed_battle(battle)
+        # mask = np.array(SinglesEnv.get_action_mask(battle))
+        # with torch.no_grad():
+        #     obs_dict = {
+        #         "observation": torch.as_tensor(obs, device=self.policy.device).unsqueeze(0),
+        #         "action_mask": torch.as_tensor(mask, device=self.policy.device).unsqueeze(0),
+        #     }
+        #     action, _, _ = self.policy.forward(obs_dict)
+        # return SinglesEnv.action_to_order(action.cpu().numpy()[0], battle)
+        return self.choose_random_move(battle)
