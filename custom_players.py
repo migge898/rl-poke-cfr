@@ -5,12 +5,12 @@ import pickle
 import os
 import datetime
 from collections import defaultdict
-from poke_env.battle import AbstractBattle, Field, SideCondition
+from poke_env.battle import AbstractBattle, Effect, Field, PokemonType, SideCondition, Status
 from poke_env.environment import SinglesEnv
 from poke_env.player import BattleOrder, DefaultBattleOrder, Player
 from poke_env.data import GenData
 import torch
-from helper import StateHelper, one_hot
+from helper import VOLATILE_EFFECTS_LIST, StateHelper, bin_pp, one_hot
 
 class MaxDamagePlayer(Player):
     def choose_move(self, battle):
@@ -239,108 +239,199 @@ class TabularQLearningPlayer(Player):
             print(f"Loaded Q-Table with {len(self.q_table)} states.")
 
 class WangPlayer(Player):
-    def __init__(self, policy=None, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.policy = policy
-        self.gen_data = GenData.from_gen(9)
-        # Create a mapping for species to index
+        self.gen_data = GenData.from_gen(4)
         self.species_list = sorted(list(self.gen_data.pokedex.keys()))
-        self.species_to_id = {s: i for i, s in enumerate(self.species_list)}
+        self.moves_list = sorted(list(self.gen_data.moves.keys()))
+        self.abilities_list = sorted(list(self.gen_data.abilities))
+        self.items_list = sorted(list(self.gen_data.items))
+        self.type_list = [t.name for t in PokemonType if t != PokemonType.THREE_QUESTION_MARKS and t != PokemonType.STELLAR]
+        self.volatile_list = VOLATILE_EFFECTS_LIST
 
     def embed_battle(self, battle: AbstractBattle) -> np.ndarray:
-        debug_dict = {}
-        # 1. Global / Side Conditions
-        side_features = []
-        side_labels = ["me", "opponent"]
-        side_conditions = [battle.side_conditions, battle.opponent_side_conditions]
+        features = []
+        self.debug_dict = {}
+
+        # --- 1. FIELD FEATURES (Table A.1) ---
+        for w in [Field.SUNNY_DAY, Field.RAIN_DANCE, Field.HAIL, Field.SANDSTORM]:
+            duration = battle.fields.get(w, 0)
+            val = 8 if duration is True else (duration if isinstance(duration, int) else 0)
+            vec = one_hot(val, 0, 8)
+            features.append(vec)
+            self.debug_dict[f"field_{w.name.lower()}"] = vec.tolist()
+
+        features.append([1.0 if not battle.weather else 0.0])
+        self.debug_dict["field_no_weather"] = [1.0 if not battle.weather else 0.0]
         
-        # Global: Trick Room (length 7: 0-5 turns + No Trick Room)
         tr_turns = battle.fields.get(Field.TRICK_ROOM, 0)
-        side_features.append(one_hot(tr_turns, 0, 6))
-        debug_dict["trick_room"] = one_hot(tr_turns, 0, 6).tolist()
+        tr_val = 6 if tr_turns is False else (tr_turns if isinstance(tr_turns, int) else 0)
+        features.append(one_hot(tr_val, 0, 6))
+        self.debug_dict["field_trick_room"] = one_hot(tr_val, 0, 6).tolist()
 
-        # Stealth Rock (Binary: Me, then Opponent)
-        for i, side in enumerate(side_conditions):
-            sr = 1 if SideCondition.STEALTH_ROCK in side else 0
-            side_features.append(one_hot(sr, 0, 1))
-            debug_dict[f"{side_labels[i]}_stealth_rock"] = one_hot(sr, 0, 1).tolist()
+        # --- Force Switch Logic ---
+
+        # Me: Am I prompted to switch?
+        me_forced = 1 if battle.force_switch else 0
+
+        # Representation as two separate Length-2 One-Hots (Total 4 features)
+        features.append(one_hot(me_forced, 0, 1))
+
+        self.debug_dict["force_switch_me"] = one_hot(me_forced, 0, 1).tolist()
+
+        # # unknown: Number of unrevealed opponent Pokemon (Length 7: 0-6)
+        unknown_count = 6 - len(battle.opponent_team)
+        features.append(one_hot(unknown_count, 0, 6))
+        self.debug_dict["global_unknown_count"] = unknown_count
+
+        # --- 2. SIDE CONDITIONS (Table A.1) ---
+        sides = [battle.side_conditions, battle.opponent_side_conditions]
+        side_names = ["me", "opp"]
+
+        # Stealth Rock (Length 2: Me then Opponent)
+        for i, s in enumerate(sides):
+            sr = 1 if SideCondition.STEALTH_ROCK in s else 0
+            features.append(one_hot(sr, 0, 1))
+            self.debug_dict[f"side_{side_names[i]}_stealth_rock"] = sr
             
-        # Spikes (One-hot 0-3: Me, then Opponent)
-        for i, side in enumerate(side_conditions):
-            spikes = side.get(SideCondition.SPIKES, 0)
-            side_features.append(one_hot(spikes, 0, 3))
-            debug_dict[f"{side_labels[i]}_spikes"] = one_hot(spikes, 0, 3).tolist()
+        # Spikes (Length 4 each: Me then Opponent)
+        for i, s in enumerate(sides):
+            spikes = s.get(SideCondition.SPIKES, 0)
+            features.append(one_hot(spikes, 0, 3))
+            self.debug_dict[f"side_{side_names[i]}_spikes"] = spikes
             
-        # Toxic Spikes (One-hot 0-2: Me, then Opponent)
-        for i, side in enumerate(side_conditions):
-            t_spikes = side.get(SideCondition.TOXIC_SPIKES, 0)
-            side_features.append(one_hot(t_spikes, 0, 2))
-            debug_dict[f"{side_labels[i]}_toxic_spikes"] = one_hot(t_spikes, 0, 2).tolist()
+        # Toxic Spikes (Length 3 each: Me then Opponent)
+        for i, s in enumerate(sides):
+            t_spikes = s.get(SideCondition.TOXIC_SPIKES, 0)
+            features.append(one_hot(t_spikes, 0, 2))
+            self.debug_dict[f"side_{side_names[i]}_toxic_spikes"] = t_spikes
 
-        # Reflect (One-hot 0-9: Me, then Opponent)
-        for i, side in enumerate(side_conditions):
-            turns = side.get(SideCondition.REFLECT, 0)
-            val = 5 if turns is True else (turns if isinstance(turns, int) else 0)
-            side_features.append(one_hot(val, 0, 9))
-            debug_dict[f"{side_labels[i]}_reflect"] = one_hot(val, 0, 9).tolist()
+        # Reflect, Light Screen, Safeguard (Grouped by feature, then Me then Opponent)
+        for sc, m_v in [(SideCondition.REFLECT, 9), (SideCondition.LIGHT_SCREEN, 9), (SideCondition.SAFEGUARD, 6)]:
+            for i, s in enumerate(sides):
+                t = s.get(sc, 0)
+                # If True (unknown duration), guess middle value. Else use int or 0.
+                v = (m_v // 2) if t is True else (t if isinstance(t, int) else 0)
+                vec = one_hot(v, 0, m_v)
+                features.append(vec)
+                self.debug_dict[f"side_{side_names[i]}_{sc.name.lower()}"] = vec.tolist()
 
-        # Light Screen (One-hot 0-9: Me, then Opponent)
-        for i, side in enumerate(side_conditions):
-            turns = side.get(SideCondition.LIGHT_SCREEN, 0)
-            val = 5 if turns is True else (turns if isinstance(turns, int) else 0)
-            side_features.append(one_hot(val, 0, 9))
-            debug_dict[f"{side_labels[i]}_light_screen"] = one_hot(val, 0, 9).tolist()
+        # --- 3. POKEMON FEATURES (Table A.2) ---
+        self.debug_dict["pokemon"] = []
+        my_team = list(battle.team.values())
+        opp_team = list(battle.opponent_team.values())
 
-        # Safeguard (One-hot 0-6: Me, then Opponent)
-        for i, side in enumerate(side_conditions):
-            turns = side.get(SideCondition.SAFEGUARD, 0)
-            val = 3 if turns is True else (turns if isinstance(turns, int) else 0)
-            side_features.append(one_hot(val, 0, 6))
-            debug_dict[f"{side_labels[i]}_safeguard"] = one_hot(val, 0, 6).tolist()
+        for i in range(12):
+            mon = my_team[i] if i < 6 else (opp_team[i-6] if (i-6) < len(opp_team) else None)
+            mon_vec = []
+            
+            # unknown logic: if mon doesn't exist yet in the opponent team list
+            is_unknown = 1 if (i >= 6 and mon is None) else 0
+            
+            if mon is None or is_unknown:
+                # If slot is empty or unknown, bit 1 is 'unknown', rest are 0
+                padding = np.zeros(300)
+                padding[-1] = 1.0 if is_unknown else 0.0 # 'unknown' feature is the last bit
+                features.append(padding)
+                continue
 
-        # 2. Pokemon Representation (Table A.2)
-        pokemon_features = []
-        
-        # We need exactly 6 for us and 6 for opponent to maintain vector size
-        all_mons = list(battle.team.values())
-        while len(all_mons) < 6: all_mons.append(None)
-        
-        opp_mons = list(battle.opponent_team.values())
-        while len(opp_mons) < 6: opp_mons.append(None)
-        debug_dict["pokemon"] = []
+            # Species, Ability, Item (Normalized 0-1)
+            mon_vec.append([self.species_list.index(mon.species) / len(self.species_list)])
+            mon_vec.append([self.abilities_list.index(mon.ability) / len(self.abilities_list) if mon.ability else 0])
+            mon_vec.append([self.items_list.index(mon.item) / len(self.items_list) if mon.item else 0])
 
-        for mon in all_mons + opp_mons:
-            debug_mon = {}
-            if mon is None:
-                pokemon_features.append(np.zeros(99)) # Species(1) + HP(7) + 7*Boosts(13)
-            else:
-                mon_vec = []
+            # Moves & PP (4 Slots)
+            moves = list(mon.moves.values())
+            for m_i in range(4):
+                move = moves[m_i] if m_i < len(moves) else None
+                mon_vec.append([self.moves_list.index(move.id) / len(self.moves_list) if move else 0])
+                mon_vec.append(one_hot(bin_pp(move.current_pp) if move else 0, 0, 3))
 
-                spec_id = self.species_to_id.get(mon.species, 0)
-                mon_vec.append([spec_id])
-                debug_mon["species"] = f"{mon.species} (ID: {spec_id})"
-                
-                # HP Binning (Table A.0.1)
-                if mon.current_hp == 0:
-                    hp_vec = one_hot(0, 0, 6)
-                else:
-                    # 1 to 6 bins for > 0 HP
-                    hp_bin = int(mon.current_hp_fraction * 5) + 1
-                    hp_vec = one_hot(hp_bin, 0, 6)
-                mon_vec.append(hp_vec)
-                debug_mon["hp"] = f"{hp_vec.tolist()} (HP%: {mon.current_hp_fraction:.2f})"
-                
-                # Boosts (7 stats, -6 to +6 -> 13 bins)
-                for stat in ["atk", "def", "spa", "spd", "spe", "accuracy", "evasion"]:
-                    boost_val = mon.boosts.get(stat, 0)
-                    mon_vec.append(one_hot(boost_val, -6, 6))
-                    debug_mon[f"{stat}_boost"] = f"{one_hot(boost_val, -6, 6).tolist()} (Boost: {boost_val})"
-                
-                debug_dict["pokemon"].append(debug_mon)
-                pokemon_features.append(np.concatenate(mon_vec))
+            # get last used move
+            last_move = mon.last_move
+            last_move_idx = self.moves_list.index(last_move.id) if last_move else 0
+            mon_vec.append([last_move_idx / len(self.moves_list)])
 
-        return np.concatenate(side_features + pokemon_features, dtype=np.float32)
-    
+            # get types
+            type_vec = np.zeros(18, dtype=np.float32)
+            if mon.type_1:
+                idx1 = self.type_list.index(mon.type_1)
+                type_vec[idx1] = 1.0
+            if mon.type_2:
+                idx2 = self.type_list.index(mon.type_2)
+                type_vec[idx2] = 1.0
+
+            mon_vec.append(type_vec)
+
+            # HP Fraction (Length 17: 0 HP bin + 16 segments)
+            hp_bin = 0 if mon.current_hp == 0 else int(mon.current_hp_fraction * 16) + 1
+            mon_vec.append(one_hot(hp_bin, 0, 17))
+
+            # Stat Boosts (7 stats * 13 bins)
+            for s in ["atk", "def", "spa", "spd", "spe", "accuracy", "evasion"]:
+                mon_vec.append(one_hot(int(mon.boosts.get(s, 0)), -6, 6))
+
+            # Volatile Effects (38 effects * 2-length one-hots)
+            for effect in self.volatile_list:
+                active = 1 if effect in mon.effects else 0
+                mon_vec.append(one_hot(active, 0, 1)) # [1,0] OFF, [0,1] ON
+
+            # Specific Counters (Encore, Taunt, Magnet Rise, Slow Start)
+            mon_vec.append(one_hot(mon.effects.get(Effect.ENCORE, 0), 0, 8))
+            mon_vec.append(one_hot(mon.effects.get(Effect.TAUNT, 0), 0, 5))
+            mon_vec.append(one_hot(mon.effects.get(Effect.MAGNET_RISE, 0), 0, 6))
+            mon_vec.append(one_hot(mon.effects.get(Effect.SLOW_START, 0), 0, 5))
+
+            # Gender (Length 3: M, F, N)
+            gender_map = {"NEUTRAL": 2, "MALE": 0, "FEMALE": 1} # Logic: map string to 0,1,2
+            mon_vec.append(one_hot(gender_map.get(str(mon.gender), 2), 0, 2))
+
+            # Status (Length 7: Burn, Frz, Par, Psn, Slp, Tox, FNT)
+            status_vec = np.zeros(7, dtype=np.float32)
+            if mon.current_hp == 0:
+                status_vec[6] = 1.0  # FNT
+            elif mon.status is not None:
+                status_mapping = {
+                    Status.BRN: 0,
+                    Status.FRZ: 1,
+                    Status.PAR: 2,
+                    Status.PSN: 3,
+                    Status.SLP: 4,
+                    Status.TOX: 5
+                }
+                idx = status_mapping.get(mon.status)
+                if idx is not None:
+                    status_vec[idx] = 1.0
+
+            mon_vec.append(status_vec)
+
+            # Status Counters
+            mon_vec.append(one_hot(mon.status_counter if mon.status == Status.TOX else 0, 0, 20))
+            mon_vec.append(one_hot(mon.status_counter if mon.status == Status.SLP else 0, 0, 10))
+
+            # Log Size
+            mon_vec.append(one_hot(int(np.log10(mon.weight)) if mon.weight > 0 else 0, 0, 4))
+            mon_vec.append(one_hot(int(np.log10(mon.height * 100)) if mon.height > 0 else 0, 0, 3))
+
+            # Combat Mechanics
+            mon_vec.append(one_hot(1 if mon.first_turn else 0, 0, 1)) # first turn
+            mon_vec.append(one_hot(mon.effects.get(Effect.PROTECT, 0), 0, 5)) # protect counter
+            mon_vec.append(one_hot(1 if mon.must_recharge else 0, 0, 1)) # must recharge
+            mon_vec.append(one_hot(1 if mon.preparing else 0, 0, 1)) # preparing
+
+            # Active & Opponent (Length 2 each)
+            mon_vec.append(one_hot(1 if mon.active else 0, 0, 1)) # [1,0] bench, [0,1] active
+            is_opp = 1 if i >= 6 else 0
+            mon_vec.append(one_hot(is_opp, 0, 1)) # [1,0] me, [0,1] opponent
+
+            # unknown flag: 0 because it's known
+            mon_vec.append([0.0])
+
+            features.append(np.concatenate(mon_vec, dtype=np.float32))
+        feature_vector = np.concatenate(features, dtype=np.float32)
+        print(f"Feature vector length: {len(feature_vector)}")   
+        return feature_vector
+
     def choose_move(self, battle: AbstractBattle) -> BattleOrder | Awaitable[BattleOrder]:
         # if battle.wait: return DefaultBattleOrder()
         obs = self.embed_battle(battle)
