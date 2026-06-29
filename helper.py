@@ -4,6 +4,49 @@ import numpy as np
 
 from poke_env.battle import MoveCategory
 
+from poke_env.battle import Effect
+
+VOLATILE_EFFECTS_LIST = [
+    Effect.SUBSTITUTE,      # Delegator
+    Effect.CONFUSION,       # Verwirrung
+    Effect.LEECH_SEED,      # Egelsamen
+    Effect.ATTRACT,         # Anziehung
+    Effect.CURSE,           # Fluch (Geist-Variante)
+    Effect.NIGHTMARE,       # Nachtmar
+    Effect.YAWN,            # Gähner
+    Effect.PERISH_SONG,     # Abgesang
+    Effect.DESTINY_BOND,    # Abgangsbund
+    Effect.ENCORE,          # Zugabe
+    Effect.TAUNT,           # Verhöhner
+    Effect.TORMENT,         # Folterknecht
+    Effect.EMBARGO,         # Embargo
+    Effect.HEAL_BLOCK,      # Heilverbot
+    Effect.MAGNET_RISE,     # Magnetflug
+    Effect.AQUA_RING,       # Aquaring
+    Effect.INGRAIN,         # Verwurzelung
+    Effect.POWER_TRICK,     # Krafttrick
+    Effect.GASTRO_ACID,     # Magensaft
+    Effect.MIRACLE_EYE,     # Wunderauge
+    Effect.FORESIGHT,       # Gesichte
+    Effect.ODOR_SLEUTH,     # Schnüffler
+    Effect.MIND_READER,     # Willensleser
+    Effect.LOCK_ON,         # Zielschuss
+    Effect.FOCUS_ENERGY,    # Energiefokus
+    Effect.CHARGE,          # Ladevorgang
+    Effect.DEFENSE_CURL,    # Einigler (wichtig für Walzer-Boost)
+    Effect.MINIMIZE,        # Komprimator (wichtig für Stampfer-Dmg)
+    Effect.MUD_SPORT,       # Lehmspieler
+    Effect.WATER_SPORT,     # Wassersport
+    Effect.BIDE,            # Geduld
+    Effect.RAGE,            # Rage
+    Effect.BIND,            # Klammergriff (Trapping)
+    Effect.CLAMP,           # Schnapper (Trapping)
+    Effect.FIRE_SPIN,       # Feuerwirbel (Trapping)
+    Effect.MAGMA_STORM,     # Lavasturm (Trapping)
+    Effect.WHIRLPOOL,       # Whirlpool (Trapping)
+    Effect.SAND_TOMB,       # Sandgrab (Trapping)
+]
+
 def one_hot(value: int, min_val: int, max_val: int) -> np.ndarray:
     length = max_val - min_val + 1
     vec = np.zeros(length, dtype=np.float32)
@@ -13,6 +56,11 @@ def one_hot(value: int, min_val: int, max_val: int) -> np.ndarray:
 
 def clip(n, minn, maxn):
     return max(min(maxn, n), minn)
+
+def bin_pp(pp_value):
+    # Wang uses floor(x^(1/3)) binning for PP (Table A.0.1)
+    # Result is 0 to 3 (total 4 bins)
+    return int(np.floor(pp_value ** (1/3)))
 
 class StateHelper:
     def __init__(self, pokedex_path="data/gen4pokedex.json", moves_path="data/gen4moves.json"):
