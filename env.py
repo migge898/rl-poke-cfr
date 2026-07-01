@@ -10,7 +10,7 @@ from stable_baselines3.common.policies import ActorCriticPolicy
 
 from custom_players import WangPlayer
 
-N_FEATURES = 1337
+N_FEATURES = 4001
 
 class WangFeaturesExtractor(BaseFeaturesExtractor):
     def __init__(self, observation_space):
