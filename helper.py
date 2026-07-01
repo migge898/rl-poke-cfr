@@ -1,10 +1,14 @@
 import json
 import os
+import zlib
 import numpy as np
 
-from poke_env.battle import MoveCategory
+from poke_env import to_id_str
 
 from poke_env.battle import Effect
+
+from poke_env.battle import Effect
+from poke_env.data import GenData
 
 VOLATILE_EFFECTS_LIST = [
     Effect.SUBSTITUTE,      # Delegator
@@ -14,7 +18,7 @@ VOLATILE_EFFECTS_LIST = [
     Effect.CURSE,           # Fluch (Geist-Variante)
     Effect.NIGHTMARE,       # Nachtmar
     Effect.YAWN,            # Gähner
-    Effect.PERISH_SONG,     # Abgesang
+    Effect.PERISH3,         # Abgesang (Start-Status in poke-env)
     Effect.DESTINY_BOND,    # Abgangsbund
     Effect.ENCORE,          # Zugabe
     Effect.TAUNT,           # Verhöhner
@@ -28,15 +32,12 @@ VOLATILE_EFFECTS_LIST = [
     Effect.GASTRO_ACID,     # Magensaft
     Effect.MIRACLE_EYE,     # Wunderauge
     Effect.FORESIGHT,       # Gesichte
-    Effect.ODOR_SLEUTH,     # Schnüffler
     Effect.MIND_READER,     # Willensleser
     Effect.LOCK_ON,         # Zielschuss
     Effect.FOCUS_ENERGY,    # Energiefokus
     Effect.CHARGE,          # Ladevorgang
-    Effect.DEFENSE_CURL,    # Einigler (wichtig für Walzer-Boost)
-    Effect.MINIMIZE,        # Komprimator (wichtig für Stampfer-Dmg)
-    Effect.MUD_SPORT,       # Lehmspieler
-    Effect.WATER_SPORT,     # Wassersport
+    Effect.DEFENSE_CURL,    # Einigler
+    Effect.MINIMIZE,        # Komprimator
     Effect.BIDE,            # Geduld
     Effect.RAGE,            # Rage
     Effect.BIND,            # Klammergriff (Trapping)
@@ -45,6 +46,9 @@ VOLATILE_EFFECTS_LIST = [
     Effect.MAGMA_STORM,     # Lavasturm (Trapping)
     Effect.WHIRLPOOL,       # Whirlpool (Trapping)
     Effect.SAND_TOMB,       # Sandgrab (Trapping)
+    Effect.WRAP,            # Wickel (Trapping)
+    Effect.DISABLE,         # Aussetzer (Sehr wichtig in Gen 4)
+    Effect.FLASH_FIRE,      # Feuerfänger (Aktivierter Status-Effekt)
 ]
 
 def one_hot(value: int, min_val: int, max_val: int) -> np.ndarray:
@@ -61,6 +65,24 @@ def bin_pp(pp_value):
     # Wang uses floor(x^(1/3)) binning for PP (Table A.0.1)
     # Result is 0 to 3 (total 4 bins)
     return int(np.floor(pp_value ** (1/3)))
+
+def load_abilities_from_gen_data(gen_data: GenData):
+    abilities = set()
+    for pokemon_data in gen_data.pokedex.values():
+        if "abilities" in pokemon_data:
+            for ability_name in pokemon_data["abilities"].values():
+                abilities.add(to_id_str(ability_name))
+    return sorted(list(abilities))
+
+def item_to_deterministic_float(item_string: str) -> float:
+    if not item_string:
+        return 0.0
+    
+    clean_id = to_id_str(item_string)
+    
+    checksum = zlib.crc32(clean_id.encode("utf-8")) & 0xffffffff
+    
+    return checksum / 0xffffffff
 
 class StateHelper:
     def __init__(self, pokedex_path="data/gen4pokedex.json", moves_path="data/gen4moves.json"):
