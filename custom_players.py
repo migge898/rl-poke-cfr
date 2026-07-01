@@ -5,12 +5,13 @@ import pickle
 import os
 import datetime
 from collections import defaultdict
-from poke_env.battle import AbstractBattle, Effect, Field, PokemonType, SideCondition, Status
+from poke_env import to_id_str
+from poke_env.battle import AbstractBattle, Effect, Field, PokemonType, SideCondition, Status, Weather
 from poke_env.environment import SinglesEnv
 from poke_env.player import BattleOrder, DefaultBattleOrder, Player
 from poke_env.data import GenData
 import torch
-from helper import VOLATILE_EFFECTS_LIST, StateHelper, bin_pp, one_hot
+from helper import VOLATILE_EFFECTS_LIST, StateHelper, bin_pp, item_to_deterministic_float, load_abilities_from_gen_data, one_hot
 
 class MaxDamagePlayer(Player):
     def choose_move(self, battle):
@@ -239,23 +240,23 @@ class TabularQLearningPlayer(Player):
             print(f"Loaded Q-Table with {len(self.q_table)} states.")
 
 class WangPlayer(Player):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, policy=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.policy = policy
         self.gen_data = GenData.from_gen(4)
         self.species_list = sorted(list(self.gen_data.pokedex.keys()))
         self.moves_list = sorted(list(self.gen_data.moves.keys()))
-        self.abilities_list = sorted(list(self.gen_data.abilities))
-        self.items_list = sorted(list(self.gen_data.items))
+        self.abilities_list = load_abilities_from_gen_data(self.gen_data)
         self.type_list = [t.name for t in PokemonType if t != PokemonType.THREE_QUESTION_MARKS and t != PokemonType.STELLAR]
         self.volatile_list = VOLATILE_EFFECTS_LIST
 
     def embed_battle(self, battle: AbstractBattle) -> np.ndarray:
-        features = []
+        features = [] # total length of 4001
         self.debug_dict = {}
 
         # --- 1. FIELD FEATURES (Table A.1) ---
-        for w in [Field.SUNNY_DAY, Field.RAIN_DANCE, Field.HAIL, Field.SANDSTORM]:
-            duration = battle.fields.get(w, 0)
+        for w in [Weather.SUNNYDAY, Weather.RAINDANCE, Weather.HAIL, Weather.SANDSTORM]:
+            duration = battle.weather.get(w, 0)
             val = 8 if duration is True else (duration if isinstance(duration, int) else 0)
             vec = one_hot(val, 0, 8)
             features.append(vec)
@@ -324,123 +325,145 @@ class WangPlayer(Player):
         for i in range(12):
             mon = my_team[i] if i < 6 else (opp_team[i-6] if (i-6) < len(opp_team) else None)
             mon_vec = []
+            mon_debug = {}
             
-            # unknown logic: if mon doesn't exist yet in the opponent team list
             is_unknown = 1 if (i >= 6 and mon is None) else 0
-            
+            mon_debug["is_unknown"] = bool(is_unknown)
+            mon_debug["slot"] = i
+
             if mon is None or is_unknown:
-                # If slot is empty or unknown, bit 1 is 'unknown', rest are 0
-                padding = np.zeros(300)
-                padding[-1] = 1.0 if is_unknown else 0.0 # 'unknown' feature is the last bit
+                padding = np.zeros(323, dtype=np.float32) # due to the fixed size of the feature vector for a Pokemon
+                padding[-1] = 1.0 if is_unknown else 0.0
                 features.append(padding)
+                mon_debug["species"] = "None"
+                self.debug_dict["pokemon"].append(mon_debug)
                 continue
 
-            # Species, Ability, Item (Normalized 0-1)
+            # Species, Ability, Item
+            mon_debug["species"] = mon.species
+            mon_debug["ability"] = mon.ability
+            mon_debug["item"] = mon.item
             mon_vec.append([self.species_list.index(mon.species) / len(self.species_list)])
-            mon_vec.append([self.abilities_list.index(mon.ability) / len(self.abilities_list) if mon.ability else 0])
-            mon_vec.append([self.items_list.index(mon.item) / len(self.items_list) if mon.item else 0])
+            mon_vec.append([self.abilities_list.index(to_id_str(mon.ability)) / len(self.abilities_list) if mon.ability else 0])
+            mon_vec.append([item_to_deterministic_float(mon.item)])
 
-            # Moves & PP (4 Slots)
+            # Moves & PP
+            mon_debug["moves"] = {}
             moves = list(mon.moves.values())
             for m_i in range(4):
                 move = moves[m_i] if m_i < len(moves) else None
                 mon_vec.append([self.moves_list.index(move.id) / len(self.moves_list) if move else 0])
                 mon_vec.append(one_hot(bin_pp(move.current_pp) if move else 0, 0, 3))
+                if move:
+                    mon_debug["moves"][move.id] = move.current_pp
 
-            # get last used move
+            # Last Move
             last_move = mon.last_move
+            mon_debug["last_move"] = last_move.id if last_move else None
             last_move_idx = self.moves_list.index(last_move.id) if last_move else 0
             mon_vec.append([last_move_idx / len(self.moves_list)])
 
-            # get types
+            # Types
+            mon_debug["types"] = [mon.type_1, mon.type_2]
             type_vec = np.zeros(18, dtype=np.float32)
             if mon.type_1:
-                idx1 = self.type_list.index(mon.type_1)
+                idx1 = self.type_list.index(mon.type_1.name)
                 type_vec[idx1] = 1.0
             if mon.type_2:
-                idx2 = self.type_list.index(mon.type_2)
+                idx2 = self.type_list.index(mon.type_2.name)
                 type_vec[idx2] = 1.0
-
             mon_vec.append(type_vec)
 
-            # HP Fraction (Length 17: 0 HP bin + 16 segments)
+            # HP Fraction
+            mon_debug["hp_fraction"] = mon.current_hp_fraction
             hp_bin = 0 if mon.current_hp == 0 else int(mon.current_hp_fraction * 16) + 1
             mon_vec.append(one_hot(hp_bin, 0, 17))
 
-            # Stat Boosts (7 stats * 13 bins)
+            # Stat Boosts
+            mon_debug["boosts"] = {}
             for s in ["atk", "def", "spa", "spd", "spe", "accuracy", "evasion"]:
-                mon_vec.append(one_hot(int(mon.boosts.get(s, 0)), -6, 6))
+                boost_val = int(mon.boosts.get(s, 0))
+                mon_debug["boosts"][s] = boost_val
+                mon_vec.append(one_hot(boost_val, -6, 6))
 
-            # Volatile Effects (38 effects * 2-length one-hots)
+            # Volatile Effects
+            mon_debug["volatiles"] = [effect for effect in self.volatile_list if effect in mon.effects]
             for effect in self.volatile_list:
                 active = 1 if effect in mon.effects else 0
-                mon_vec.append(one_hot(active, 0, 1)) # [1,0] OFF, [0,1] ON
+                mon_vec.append(one_hot(active, 0, 1))
 
-            # Specific Counters (Encore, Taunt, Magnet Rise, Slow Start)
-            mon_vec.append(one_hot(mon.effects.get(Effect.ENCORE, 0), 0, 8))
-            mon_vec.append(one_hot(mon.effects.get(Effect.TAUNT, 0), 0, 5))
-            mon_vec.append(one_hot(mon.effects.get(Effect.MAGNET_RISE, 0), 0, 6))
-            mon_vec.append(one_hot(mon.effects.get(Effect.SLOW_START, 0), 0, 5))
+            # Specific Counters
+            mon_debug["counters"] = {
+                "encore": mon.effects.get(Effect.ENCORE, 0),
+                "taunt": mon.effects.get(Effect.TAUNT, 0),
+                "magnet_rise": mon.effects.get(Effect.MAGNET_RISE, 0),
+                "slow_start": mon.effects.get(Effect.SLOW_START, 0)
+            }
+            mon_vec.append(one_hot(mon_debug["counters"]["encore"], 0, 8))
+            mon_vec.append(one_hot(mon_debug["counters"]["taunt"], 0, 5))
+            mon_vec.append(one_hot(mon_debug["counters"]["magnet_rise"], 0, 6))
+            mon_vec.append(one_hot(mon_debug["counters"]["slow_start"], 0, 5))
 
-            # Gender (Length 3: M, F, N)
-            gender_map = {"NEUTRAL": 2, "MALE": 0, "FEMALE": 1} # Logic: map string to 0,1,2
+            # Gender
+            gender_map = {"NEUTRAL": 2, "MALE": 0, "FEMALE": 1}
+            mon_debug["gender"] = str(mon.gender)
             mon_vec.append(one_hot(gender_map.get(str(mon.gender), 2), 0, 2))
 
-            # Status (Length 7: Burn, Frz, Par, Psn, Slp, Tox, FNT)
+            # Status
+            mon_debug["status"] = str(mon.status) if mon.status else ("FNT" if mon.current_hp == 0 else None)
             status_vec = np.zeros(7, dtype=np.float32)
             if mon.current_hp == 0:
-                status_vec[6] = 1.0  # FNT
+                status_vec[6] = 1.0
             elif mon.status is not None:
-                status_mapping = {
-                    Status.BRN: 0,
-                    Status.FRZ: 1,
-                    Status.PAR: 2,
-                    Status.PSN: 3,
-                    Status.SLP: 4,
-                    Status.TOX: 5
-                }
+                status_mapping = {Status.BRN: 0, Status.FRZ: 1, Status.PAR: 2, Status.PSN: 3, Status.SLP: 4, Status.TOX: 5}
                 idx = status_mapping.get(mon.status)
-                if idx is not None:
-                    status_vec[idx] = 1.0
-
+                if idx is not None: status_vec[idx] = 1.0
             mon_vec.append(status_vec)
 
             # Status Counters
-            mon_vec.append(one_hot(mon.status_counter if mon.status == Status.TOX else 0, 0, 20))
-            mon_vec.append(one_hot(mon.status_counter if mon.status == Status.SLP else 0, 0, 10))
+            mon_debug["toxic_counter"] = mon.status_counter if mon.status == Status.TOX else 0
+            mon_debug["sleep_counter"] = mon.status_counter if mon.status == Status.SLP else 0
+            mon_vec.append(one_hot(mon_debug["toxic_counter"], 0, 20))
+            mon_vec.append(one_hot(mon_debug["sleep_counter"], 0, 10))
 
-            # Log Size
+            # Size
             mon_vec.append(one_hot(int(np.log10(mon.weight)) if mon.weight > 0 else 0, 0, 4))
             mon_vec.append(one_hot(int(np.log10(mon.height * 100)) if mon.height > 0 else 0, 0, 3))
 
             # Combat Mechanics
-            mon_vec.append(one_hot(1 if mon.first_turn else 0, 0, 1)) # first turn
-            mon_vec.append(one_hot(mon.effects.get(Effect.PROTECT, 0), 0, 5)) # protect counter
-            mon_vec.append(one_hot(1 if mon.must_recharge else 0, 0, 1)) # must recharge
-            mon_vec.append(one_hot(1 if mon.preparing else 0, 0, 1)) # preparing
+            mon_debug["first_turn"] = bool(mon.first_turn)
+            mon_debug["protect_counter"] = mon.effects.get(Effect.PROTECT, 0)
+            mon_debug["must_recharge"] = bool(mon.must_recharge)
+            mon_debug["preparing"] = bool(mon.preparing)
+            
+            mon_vec.append(one_hot(1 if mon.first_turn else 0, 0, 1))
+            mon_vec.append(one_hot(mon_debug["protect_counter"], 0, 5))
+            mon_vec.append(one_hot(1 if mon.must_recharge else 0, 0, 1))
+            mon_vec.append(one_hot(1 if mon.preparing else 0, 0, 1))
 
-            # Active & Opponent (Length 2 each)
-            mon_vec.append(one_hot(1 if mon.active else 0, 0, 1)) # [1,0] bench, [0,1] active
-            is_opp = 1 if i >= 6 else 0
-            mon_vec.append(one_hot(is_opp, 0, 1)) # [1,0] me, [0,1] opponent
+            # Active & Team
+            mon_debug["active"] = bool(mon.active)
+            mon_debug["is_opponent"] = i >= 6
+            mon_vec.append(one_hot(1 if mon.active else 0, 0, 1))
+            mon_vec.append(one_hot(1 if mon_debug["is_opponent"] else 0, 0, 1))
 
-            # unknown flag: 0 because it's known
+            # unknown flag
             mon_vec.append([0.0])
 
             features.append(np.concatenate(mon_vec, dtype=np.float32))
+            self.debug_dict["pokemon"].append(mon_debug)
         feature_vector = np.concatenate(features, dtype=np.float32)
-        print(f"Feature vector length: {len(feature_vector)}")   
         return feature_vector
 
     def choose_move(self, battle: AbstractBattle) -> BattleOrder | Awaitable[BattleOrder]:
-        # if battle.wait: return DefaultBattleOrder()
+        if battle.wait: return DefaultBattleOrder()
         obs = self.embed_battle(battle)
-        # mask = np.array(SinglesEnv.get_action_mask(battle))
-        # with torch.no_grad():
-        #     obs_dict = {
-        #         "observation": torch.as_tensor(obs, device=self.policy.device).unsqueeze(0),
-        #         "action_mask": torch.as_tensor(mask, device=self.policy.device).unsqueeze(0),
-        #     }
-        #     action, _, _ = self.policy.forward(obs_dict)
-        # return SinglesEnv.action_to_order(action.cpu().numpy()[0], battle)
-        return self.choose_random_move(battle)
+        mask = np.array(SinglesEnv.get_action_mask(battle))
+        with torch.no_grad():
+            obs_dict = {
+                "observation": torch.as_tensor(obs, device=self.policy.device).unsqueeze(0),
+                "action_mask": torch.as_tensor(mask, device=self.policy.device).unsqueeze(0),
+            }
+            action, _, _ = self.policy.forward(obs_dict)
+        return SinglesEnv.action_to_order(action.cpu().numpy()[0], battle)
+        # return self.choose_random_move(battle)
