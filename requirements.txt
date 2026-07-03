@@ -1,5 +1,5 @@
 poke_env==0.15.0
 tensorboard==2.20.0
-stable_baselines3==2.8.0
+stable_baselines3[extra]==2.8.0
 torch==2.12.0
 torchvision==0.27.0
