@@ -249,7 +249,8 @@ class WangPlayer(Player):
         self.abilities_list = load_abilities_from_gen_data(self.gen_data)
         self.type_list = [t.name for t in PokemonType if t != PokemonType.THREE_QUESTION_MARKS and t != PokemonType.STELLAR]
         self.volatile_list = VOLATILE_EFFECTS_LIST
-
+    
+    @staticmethod
     def embed_battle(self, battle: AbstractBattle) -> np.ndarray:
         features = [] # total length of 4001
         self.debug_dict = {}
@@ -459,11 +460,16 @@ class WangPlayer(Player):
         if battle.wait: return DefaultBattleOrder()
         obs = self.embed_battle(battle)
         mask = np.array(SinglesEnv.get_action_mask(battle))
+
+        if self.policy is None:
+            # Fallback to random if no policy is provided
+            return self.choose_random_move(battle)
+        
         with torch.no_grad():
             obs_dict = {
                 "observation": torch.as_tensor(obs, device=self.policy.device).unsqueeze(0),
                 "action_mask": torch.as_tensor(mask, device=self.policy.device).unsqueeze(0),
             }
             action, _, _ = self.policy.forward(obs_dict)
-        return SinglesEnv.action_to_order(action.cpu().numpy()[0], battle)
-        # return self.choose_random_move(battle)
+        action_idx = action.cpu().numpy()[0]
+        return SinglesEnv.action_to_order(action_idx, battle)
