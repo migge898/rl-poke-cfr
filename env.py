@@ -23,10 +23,17 @@ class WangFeaturesExtractor(BaseFeaturesExtractor):
 
 class MaskedActorCriticPolicy(ActorCriticPolicy):
     def __init__(self, *args, **kwargs):
+        wang_net_arch = dict(
+            shared = [256, 256, 256],   # 3-layer shared MLP trunk
+            pi=[256, 256],              # 2-layer MLP Actor head
+            vf=[256, 256]               # 2-layer MLP Critic head
+        )
+
         super().__init__(
             *args,
             **kwargs,
-            net_arch=[256, 256, 256], # Wang uses 3-layer MLP with 256 dim (A.0.2)
+            net_arch=wang_net_arch,
+            activation_fn=torch.nn.ReLU,
             features_extractor_class=WangFeaturesExtractor,
         )
 
@@ -50,6 +57,13 @@ class WangEnv(SinglesEnv):
             agent: Box(-1, 4, shape=(N_FEATURES,), dtype=np.float32)
             for agent in self.possible_agents
         }
+        # self.observation_spaces = {
+        #     agent: GymDict({
+        #         "observation": Box(-1, 4, shape=(N_FEATURES,), dtype=np.float32),
+        #         "action_mask": Box(0, 1, shape=(22,), dtype=np.int8),
+        #     })
+        #     for agent in self.possible_agents
+        # }
     
     @classmethod
     def create_env(cls) -> Monitor:

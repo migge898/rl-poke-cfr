@@ -3,3 +3,4 @@ tensorboard==2.20.0
 stable_baselines3[extra]==2.8.0
 torch==2.12.0
 torchvision==0.27.0
+SuperSuit==3.11.0

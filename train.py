@@ -35,6 +35,8 @@ WANG_PARAMS = {
     "vf_coef": 0.4375,
     "max_grad_norm": 0.5430,
     "batch_size": 1024,
+    "clip_range": 0.0829,
+    "clip_range_vf": 0.0184,
 }
 
 def train():
@@ -58,8 +60,11 @@ def train():
     device = "cpu"
     print(f"Training on: {device}")
 
+    # should equal 1 hour of training with 4 envs and around 800 it/s on Macbook Pro M4
+    save_freq = max(1, 3_000_000 // num_envs)
+
     checkpoint_callback = CheckpointCallback(
-        save_freq=max(1, 10000 // num_envs),
+        save_freq=save_freq,
         save_path=CHECKPOINT_DIR,
         name_prefix=MODEL_NAME
     )
@@ -74,7 +79,7 @@ def train():
         **WANG_PARAMS
     )
 
-    debug_timesteps = 5000 
+    debug_timesteps = 50000000//4
     print(f"Starting debug training for {debug_timesteps} steps...")
     
     model.learn(

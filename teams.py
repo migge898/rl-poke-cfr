@@ -802,3 +802,5 @@ Calm Nature
 - Flamethrower  
 - Seismic Toss  
 """
+
+print(len(TEAMS), "teams loaded")
