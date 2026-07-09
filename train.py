@@ -22,12 +22,12 @@ from env import WangEnv, MaskedActorCriticPolicy
 
 # --- Configuration ---
 BATTLE_FORMAT = "gen4randombattle"
-MODEL_NAME = "wang_ppo_gen4_model"
+MODEL_NAME = "ppo_gen4_model_v4"
 LOG_DIR = "./tensorboard_logs/"
 CHECKPOINT_DIR = "./checkpoints/"
 
 WANG_PARAMS = {
-    "learning_rate": 10**-4.23,
+    "learning_rate": 10**-4.0,
     "n_epochs": 7,
     "gamma": 0.9999,
     "gae_lambda": 0.754,
@@ -44,7 +44,7 @@ def train():
     os.makedirs(LOG_DIR, exist_ok=True)
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
-    num_envs = 4
+    num_envs = 10
     # Create the environments
     env = SubprocVecEnv([WangEnv.create_env for _ in range(num_envs)], start_method="spawn")
 
@@ -69,24 +69,35 @@ def train():
         name_prefix=MODEL_NAME
     )
 
-    model = PPO(
-        MaskedActorCriticPolicy,
-        env,
-        device=device,
-        verbose=1,
-        tensorboard_log=LOG_DIR,
-        n_steps=3072 // num_envs,
-        **WANG_PARAMS
-    )
+    checkpoint_path = os.path.join(CHECKPOINT_DIR, "ppo_gen4_model_v3_12000000_steps.zip")
 
-    debug_timesteps = 50000000//4
+    if os.path.exists(checkpoint_path):
+        print(f"Loading existing model: {checkpoint_path}")
+        model = PPO.load(
+            checkpoint_path, 
+            env=env, 
+            device=device,
+        )
+    else:
+        print("No checkpoint found, starting new training...")
+        model = PPO(
+            MaskedActorCriticPolicy,
+            env,
+            device=device,
+            verbose=1,
+            tensorboard_log=LOG_DIR,
+            n_steps=1024,
+            **WANG_PARAMS
+        )
+    debug_timesteps = 800*86400
     print(f"Starting debug training for {debug_timesteps} steps...")
-    
+
     model.learn(
         total_timesteps=debug_timesteps,
+        reset_num_timesteps=False,
         progress_bar=True,
         callback=checkpoint_callback,
-        tb_log_name=f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        tb_log_name=f"run_continued_heuristic"
     )
 
     model.save(MODEL_NAME)
@@ -110,7 +121,7 @@ async def evaluate_model(policy):
     ]
     
     for opp in opponents:
-        await agent.battle_against(opp, n_battles=20)
+        await agent.battle_against(opp, n_battles=200)
         win_rate = (agent.n_won_battles / agent.n_finished_battles) * 100
         print(f"Win rate vs {opp.username}: {win_rate:.1f}%")
         agent.reset_battles()
