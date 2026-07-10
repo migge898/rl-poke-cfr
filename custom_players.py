@@ -236,7 +236,7 @@ class TabularQLearningPlayer(Player):
         if os.path.exists(self.q_table_path):
             with open(self.q_table_path, "rb") as f:
                 loaded_dict = pickle.load(f)
-                self.q_table = defaultdict(lambda: np.zeros(6), loaded_dict)
+                self.q_table = defaultdict(lambda: np.zeros(7), loaded_dict)
             print(f"Loaded Q-Table with {len(self.q_table)} states.")
 
 class WangPlayer(Player):
