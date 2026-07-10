@@ -22,7 +22,7 @@ from env import WangEnv, MaskedActorCriticPolicy
 
 # --- Configuration ---
 BATTLE_FORMAT = "gen4randombattle"
-MODEL_NAME = "ppo_gen4_model_v4"
+MODEL_NAME = "ppo_gen4_continued_heuristic"
 LOG_DIR = "./tensorboard_logs/"
 CHECKPOINT_DIR = "./checkpoints/"
 

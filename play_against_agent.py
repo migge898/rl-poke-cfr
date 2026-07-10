@@ -4,23 +4,24 @@ from poke_env.player import RandomPlayer
 from stable_baselines3 import PPO
 
 from custom_players import WangPlayer
-from env import MaskedActorCriticPolicy, WangEnv
-from teams import TEST_TEAM
+
+def load_model_policy(model_path: str):
+    """
+    Loads a PPO model and returns its policy.
+    """
+    model = PPO.load(model_path)
+    return model.policy
 
 async def main():
     bot_account = AccountConfiguration("MyLocalBot", "password")
+    checkpoint_path = "checkpoints/ppo_gen4_selfplay_v1_37000000_steps.zip"
     
     bot = WangPlayer(
-        policy=None,
+        policy=load_model_policy(checkpoint_path),
         account_configuration=bot_account,
-        battle_format="gen4ou",
+        battle_format="gen4randombattle",
         max_concurrent_battles=1,
-        team=TEST_TEAM
     )
-
-    # bot = RandomPlayer(
-    #     account_configuration=bot_account,
-    # )
 
     print("Bot is online! Waiting for challenges...")
 
@@ -28,4 +29,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    # test
