@@ -14,7 +14,7 @@ def load_model_policy(model_path: str):
 
 async def main():
     bot_account = AccountConfiguration("MyLocalBot", "password")
-    checkpoint_path = "checkpoints/ppo_gen4_selfplay_v1_37000000_steps.zip"
+    checkpoint_path = "checkpoints/ppo_gen4_selfplay_37000000_steps.zip"
     
     bot = WangPlayer(
         policy=load_model_policy(checkpoint_path),
